@@ -1,0 +1,429 @@
+// BracketKeeper — guild loot bid list tracker — data model
+// See /docs or the guild rules doc for the ruleset this implements.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+// Which of the two bid lists a slot belongs to. Display labels ("Current
+// Tier" / "Misc / PvP") live in src/lib/trackLabels.ts — these enum names
+// are historical and deliberately don't match what's shown in the UI.
+enum Track {
+  LEGACY
+  NON_LEGACY
+}
+
+// Lifecycle of a single bid slot. EMPTY = no item picked yet, ACTIVE = live
+// bid, PENDING = a mid-week change queued to take effect next raid week,
+// BLOCKED = the item was already won and the slot is spent.
+enum BidStatus {
+  EMPTY
+  ACTIVE
+  PENDING
+  BLOCKED
+}
+
+// How a LootDrop's winner was decided. See src/lib/rules/lootResolution.ts
+// for the tiebreak chain that produces these, and
+// src/lib/dropResolutionLabels.ts for the human-readable label/color per value.
+enum DropResolutionMethod {
+  BRACKET_OUTRIGHT
+  TANK_PRIORITY
+  TIEBREAK_BLOCKED_COUNT
+  TIEBREAK_ROLL
+  TIEBREAK_TANK_AUTOWIN
+  OPEN_ROLL_MS_OS
+  OPEN_ROLL_BOP
+  PASS_CHAIN_ROLL
+  DISENCHANT
+  SOLD
+  GATHERABLE_BID
+  RECIPE_OFFICER_AWARD
+  RECIPE_LOOTLIST
+  WORLD_BOSS_OPEN_ROLL
+  CRAFTED_BOE_QUEUE
+}
+
+// Which of a character's specs a given bid is for (used for MS/OS-style
+// priority within a bracket tie, not for the primary tiebreak chain itself).
+enum SpecPriority {
+  MAIN_SPEC
+  OFF_SPEC
+  ALT_MAIN_SPEC
+  ALT_OFF_SPEC
+}
+
+// One raid night's attendance for one character. FREE_HOLIDAY never counts
+// for or against the attendance-rate calculation in src/lib/rules/attendance.ts.
+enum AttendanceStatus {
+  PRESENT
+  ABSENT_EXCUSED
+  ABSENT_UNEXCUSED
+  FREE_HOLIDAY
+}
+
+// Lifecycle of a LootDrop record itself (separate from how the winner was
+// decided) — PENDING while mid-resolution, RESOLVED once confirmed, VOID if
+// an officer cancels it (e.g. logged in error).
+enum DropStatus {
+  PENDING
+  RESOLVED
+  VOID
+}
+
+// One officer's response while an item is offered down the pass chain
+// (src/lib/rules/passing.ts) after the original winner declines it.
+enum PassDecision {
+  PASSED
+  KEPT
+  TRADED
+}
+
+// Which open-roll flow produced a WorldBossRollLog/OpenRollLog — see
+// src/lib/rules/openRoll.ts and src/lib/rules/worldBoss.ts.
+enum RollType {
+  OPEN_BOP
+  MS_OS_PUG
+  PASS_CHAIN
+}
+
+// A character's declared intent on a world-boss roll: Need beats Greed
+// beats Pass — see src/lib/rules/worldBoss.ts.
+enum WorldBossIntent {
+  NEED
+  GREED
+  PASS
+}
+
+// ---------------------------------------------------------------------------
+// Auth / officers
+// ---------------------------------------------------------------------------
+
+// An authenticated officer account (NextAuth Credentials provider). Only the
+// admin account can add/remove/promote other officers — see
+// src/lib/actions/config.ts's requireAdmin()-gated actions.
+model Officer {
+  id            String   @id @default(cuid())
+  username      String   @unique
+  passwordHash  String
+  displayName   String
+  isAdmin       Boolean  @default(false)
+  isTankOfficer Boolean  @default(false)
+  createdAt     DateTime @default(now())
+
+  resolvedDrops     LootDrop[]         @relation("ResolvedBy")
+  attendanceEntries AttendanceRecord[] @relation("RecordedBy")
+}
+
+// ---------------------------------------------------------------------------
+// Configuration (officer-editable)
+// ---------------------------------------------------------------------------
+
+// The guild's rank ladder (Social/Initiate/Raider/Veteran/Officer by
+// default), editable at /officer/config/rank-tiers. isLootEligible gates
+// whether a rank can bid at all; attendanceRequirementPct drives the
+// auto-demotion suggestion in src/lib/rules/attendance.ts.
+model RankTier {
+  id                       String  @id @default(cuid())
+  name                     String  @unique
+  sortOrder                Int     @unique
+  isLootEligible           Boolean @default(true)
+  attendanceRequirementPct Float?
+  bonusBidEligible         Boolean @default(false)
+  createdAt                DateTime @default(now())
+
+  characters Character[]
+}
+
+// One raid tier/season. Exactly one should have isActive: true at a time —
+// nearly every query in the app scopes to "the active phase." isFirstPhase
+// marks the very first phase, relevant for phase-transition carry-over
+// rules in src/lib/rules/phaseTransition.ts.
+model Phase {
+  id           String   @id @default(cuid())
+  name         String   @unique
+  startsAt     DateTime @default(now())
+  endsAt       DateTime?
+  isActive     Boolean  @default(false)
+  isFirstPhase Boolean  @default(false)
+  createdAt    DateTime @default(now())
+
+  bidSlots          BidSlot[]
+  drops             LootDrop[]
+  bracketConfigs    BracketConfig[]
+  attendanceRecords AttendanceRecord[]
+  worldBossLogs     WorldBossRollLog[]
+}
+
+// How many bid slots exist in a given bracket (1 = best, 5 = worst; bracket
+// 0 is the "bonus bid" slot on the Misc/PvP track), per track, per phase.
+// Editable at /officer/config/brackets — the source ruleset's odd-sized
+// brackets don't sum to exactly 30, so these are an adjustable starting point.
+model BracketConfig {
+  id        String @id @default(cuid())
+  phase     Phase  @relation(fields: [phaseId], references: [id], onDelete: Cascade)
+  phaseId   String
+  track     Track
+  bracket   Int
+  slotCount Int
+  label     String?
+
+  @@unique([phaseId, track, bracket])
+}
+
+// Gold-value ranges used to bucket gatherable-material bids into a priority
+// bracket — see src/lib/rules/gatherables.ts. maxGold null means "and up."
+model GatherableValueBracket {
+  id       String  @id @default(cuid())
+  minGold  Int
+  maxGold  Int?
+  bracket  Int
+  isActive Boolean @default(true)
+
+  @@unique([minGold, maxGold])
+}
+
+// ---------------------------------------------------------------------------
+// Characters / items
+// ---------------------------------------------------------------------------
+
+// A guild member's character. mainCharacter/alts models the alt-of
+// relationship for characters sharing a person's loot priority. joinedAt
+// drives the Initiate first-week loot-ineligibility rule
+// (src/lib/rules/bidding.ts's isLootEligible).
+model Character {
+  id              String    @id @default(cuid())
+  name            String
+  server          String?
+  class           String
+  spec            String
+  isAlt           Boolean   @default(false)
+  mainCharacterId String?
+  mainCharacter   Character?  @relation("AltOf", fields: [mainCharacterId], references: [id])
+  alts            Character[] @relation("AltOf")
+  rankTier        RankTier  @relation(fields: [rankTierId], references: [id])
+  rankTierId      String
+  joinedAt        DateTime  @default(now())
+  trialWeekEndsAt DateTime?
+  notes           String?
+  isActive        Boolean   @default(true)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  bidSlots            BidSlot[]
+  wonDrops             LootDrop[]                 @relation("Winner")
+  passRecords          PassRecord[]
+  attendanceRecords    AttendanceRecord[]
+  openRollEntries      OpenRollParticipant[]
+  worldBossRollEntries WorldBossRollParticipant[]
+
+  @@unique([name, server])
+}
+
+// A catalog entry for a lootable item. isRecipe + recipeOutputIsBoE together
+// decide which award path a recipe drop takes (officer discretion vs normal
+// lootlist priority) — see src/lib/rules/recipes.ts.
+model Item {
+  id                String   @id @default(cuid())
+  name              String
+  wowheadId         Int?
+  slot              String?
+  itemLevel         Int?
+  isCraftedBoE      Boolean  @default(false)
+  isRecipe          Boolean  @default(false)
+  recipeOutputIsBoE Boolean?
+  isBoP             Boolean  @default(true)
+  sourceRaid        String?
+  sourceBoss        String?
+  notes             String?
+  createdAt         DateTime @default(now())
+
+  bidSlots BidSlot[]
+  drops    LootDrop[]
+
+  @@index([name])
+}
+
+// ---------------------------------------------------------------------------
+// Bidding
+// ---------------------------------------------------------------------------
+
+// One bracket slot on one character's loot list for one phase/track. This is
+// the core "row" of the whole app — 30-ish of these exist per character per
+// track. pendingItemId/becomesActiveAt implement the "bid changes made
+// mid-raid-week don't take effect until next week" rule (applied lazily by
+// src/lib/rules/bidding.ts's applyPendingBidTransitions, not on a cron).
+// blockedByDropId links a spent (BLOCKED) slot back to the LootDrop that
+// consumed it.
+model BidSlot {
+  id              String       @id @default(cuid())
+  character       Character    @relation(fields: [characterId], references: [id], onDelete: Cascade)
+  characterId     String
+  phase           Phase        @relation(fields: [phaseId], references: [id], onDelete: Cascade)
+  phaseId         String
+  track           Track
+  bracket         Int
+  slotIndex       Int
+  item            Item?        @relation(fields: [itemId], references: [id])
+  itemId          String?
+  status          BidStatus    @default(EMPTY)
+  pendingItemId   String?
+  becomesActiveAt DateTime?
+  specPriority    SpecPriority?
+  blockedAt       DateTime?
+  blockedByDropId String?      @unique
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  resolvedForDrop LootDrop? @relation("ResolvedSlot")
+
+  @@unique([characterId, phaseId, track, bracket, slotIndex])
+  @@index([itemId])
+}
+
+// ---------------------------------------------------------------------------
+// Loot resolution
+// ---------------------------------------------------------------------------
+
+// A single item drop and how it was awarded. resolutionSummary is the
+// plain-English explanation shown publicly on the loot log (e.g. "X won
+// bracket 1 with the fewest blocked slots..."), separate from the officer's
+// own free-text `notes`. resolvedBidSlotId is the winning BidSlot that got
+// BLOCKED as a result — null for drops that bypass bracket ranking entirely
+// (e.g. officer-discretion recipe awards).
+model LootDrop {
+  id                   String                @id @default(cuid())
+  phase                Phase                 @relation(fields: [phaseId], references: [id])
+  phaseId              String
+  item                 Item                  @relation(fields: [itemId], references: [id])
+  itemId               String
+  track                Track
+  raidDate             DateTime
+  droppedFrom          String?
+  winnerCharacter      Character?            @relation("Winner", fields: [winnerCharacterId], references: [id])
+  winnerCharacterId    String?
+  resolutionMethod     DropResolutionMethod?
+  winningBracket       Int?
+  resolvedBidSlot      BidSlot?              @relation("ResolvedSlot", fields: [resolvedBidSlotId], references: [id])
+  resolvedBidSlotId    String?               @unique
+  resolvedByOfficer    Officer?              @relation("ResolvedBy", fields: [resolvedByOfficerId], references: [id])
+  resolvedByOfficerId  String?
+  tankPriorityUsed     Boolean               @default(false)
+  tankAutoTiebreakUsed Boolean               @default(false)
+  resolutionSummary    String?
+  notes                String?
+  status               DropStatus            @default(PENDING)
+  createdAt            DateTime              @default(now())
+  resolvedAt           DateTime?
+
+  passRecords PassRecord[]
+  openRoll    OpenRollLog?
+}
+
+// One step in a drop's pass chain: the original winner (or a subsequent
+// candidate) either keeps it, trades it, or passes it to the next eligible
+// bidder in bracket order. `sequence` orders the chain for a given drop.
+model PassRecord {
+  id          String        @id @default(cuid())
+  drop        LootDrop      @relation(fields: [dropId], references: [id], onDelete: Cascade)
+  dropId      String
+  character   Character     @relation(fields: [characterId], references: [id])
+  characterId String
+  sequence    Int
+  decision    PassDecision
+  reason      String?
+  decidedAt   DateTime      @default(now())
+
+  @@unique([dropId, sequence])
+}
+
+// An open /roll 100 event — either for a BoP item nobody has bid (Open BoP)
+// or an MS>OS priority roll among a pug/raid group. Optionally tied back to
+// the LootDrop it resolved.
+model OpenRollLog {
+  id           String                @id @default(cuid())
+  drop         LootDrop?             @relation(fields: [dropId], references: [id])
+  dropId       String?               @unique
+  rollType     RollType
+  winnerRoll   Int?
+  createdAt    DateTime              @default(now())
+
+  participants OpenRollParticipant[]
+}
+
+// One character's entry in an OpenRollLog.
+model OpenRollParticipant {
+  id          String      @id @default(cuid())
+  openRoll    OpenRollLog @relation(fields: [openRollId], references: [id], onDelete: Cascade)
+  openRollId  String
+  character   Character   @relation(fields: [characterId], references: [id])
+  characterId String
+  rollValue   Int?
+  isWinner    Boolean     @default(false)
+
+  @@unique([openRollId, characterId])
+}
+
+// A world-boss loot event, tracked separately from the normal bracket
+// system since world bosses use pure Need > Greed > Pass rolls instead.
+model WorldBossRollLog {
+  id                String   @id @default(cuid())
+  phase             Phase    @relation(fields: [phaseId], references: [id])
+  phaseId           String
+  item              String
+  bossName          String
+  raidDate          DateTime
+  winnerCharacterId String?
+  createdAt         DateTime @default(now())
+
+  participants WorldBossRollParticipant[]
+}
+
+// One character's declared intent + roll on a WorldBossRollLog.
+model WorldBossRollParticipant {
+  id          String           @id @default(cuid())
+  log         WorldBossRollLog @relation(fields: [logId], references: [id], onDelete: Cascade)
+  logId       String
+  character   Character        @relation(fields: [characterId], references: [id])
+  characterId String
+  intent      WorldBossIntent
+  rollValue   Int?
+  isWinner    Boolean          @default(false)
+
+  @@unique([logId, characterId])
+}
+
+// ---------------------------------------------------------------------------
+// Attendance
+// ---------------------------------------------------------------------------
+
+// One character's attendance for one raid date. postedInAdvance/
+// missedFullWeek are recorded for officer context but don't currently feed
+// the attendance-rate math in src/lib/rules/attendance.ts (which treats any
+// non-PRESENT, non-FREE_HOLIDAY status as a miss).
+model AttendanceRecord {
+  id                   String            @id @default(cuid())
+  character            Character         @relation(fields: [characterId], references: [id], onDelete: Cascade)
+  characterId          String
+  phase                Phase             @relation(fields: [phaseId], references: [id])
+  phaseId              String
+  raidDate             DateTime
+  status               AttendanceStatus
+  postedInAdvance      Boolean           @default(false)
+  missedFullWeek       Boolean           @default(false)
+  recordedByOfficer    Officer?          @relation("RecordedBy", fields: [recordedByOfficerId], references: [id])
+  recordedByOfficerId  String?
+  createdAt            DateTime          @default(now())
+
+  @@unique([characterId, raidDate])
+  @@index([characterId, phaseId])
+}
