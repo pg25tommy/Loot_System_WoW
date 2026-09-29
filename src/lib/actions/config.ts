@@ -134,16 +134,18 @@ export async function createOfficerAction(formData: FormData) {
   revalidatePath("/officer/config/officers");
 }
 
-/** Blocks the acting admin from demoting themself, to prevent an accidental self-lockout. */
+/**
+ * Keeps the acting admin's own admin flag forced on, to prevent an accidental
+ * self-lockout. The "Admin" checkbox is disabled on your own row in the UI —
+ * disabled checkboxes aren't included in form submissions at all, so this
+ * can't just read `isAdmin` from the form for your own row (it would always
+ * come back false, even when you're only touching the Tank checkbox).
+ */
 export async function updateOfficerRoleAction(officerId: string, formData: FormData) {
   const session = await requireAdmin();
 
-  const isAdmin = formData.get("isAdmin") === "on";
   const isTankOfficer = formData.get("isTankOfficer") === "on";
-
-  if (officerId === session.user.officerId && !isAdmin) {
-    throw new Error("You can't remove your own admin access.");
-  }
+  const isAdmin = officerId === session.user.officerId ? true : formData.get("isAdmin") === "on";
 
   await prisma.officer.update({
     where: { id: officerId },

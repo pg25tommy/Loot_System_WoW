@@ -6,6 +6,7 @@ import { requireOfficer } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { Track } from "@/generated/prisma/client";
 import { awardRecipeByOfficerDiscretionAction } from "@/lib/actions/recipes";
+import { createItemAction } from "@/lib/actions/items";
 import { trackLabel } from "@/lib/trackLabels";
 
 export default async function RecipesPage() {
@@ -31,6 +32,21 @@ export default async function RecipesPage() {
           normal <Link href="/officer/loot/resolve" className="underline">loot resolution</Link> tool.
         </p>
       </div>
+
+      <form action={createItemAction} className="grid max-w-lg gap-3 panel">
+        <input type="hidden" name="isRecipe" value="on" />
+        <h2 className="text-sm font-medium">Add a recipe to the pool</h2>
+        <input name="name" placeholder="Recipe name" required className="input" />
+        <input name="sourceBoss" placeholder="Source boss (optional)" className="input" />
+        <label className="flex items-center gap-2 text-sm">
+          <input type="checkbox" name="recipeOutputIsBoE" />
+          Output is BoE — awarded here by officer discretion. Leave unchecked if the output is BoP (goes
+          through the normal resolve tool instead).
+        </label>
+        <button type="submit" className="btn">
+          Add recipe
+        </button>
+      </form>
 
       {lootlistItems.length > 0 ? (
         <div className="text-sm text-muted">

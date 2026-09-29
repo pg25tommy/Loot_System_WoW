@@ -2,6 +2,7 @@
 // by both the officer and public Master List pages so they can never drift
 // out of sync — see src/app/master-list/page.tsx and
 // src/app/officer/master-list/page.tsx.
+import { Fragment } from "react";
 import { prisma } from "@/lib/db";
 import { Track } from "@/generated/prisma/client";
 import { trackLabel } from "@/lib/trackLabels";
@@ -9,6 +10,16 @@ import { classColor } from "@/lib/wowClasses";
 
 type SlotInfo = { status: string; itemName: string | null };
 type Column = { bracket: number; slotIndex: number };
+
+/** Groups the flat slot-column list back into per-bracket sections, in order, for the row grouping. */
+function groupColumnsByBracket(columns: Column[]): [number, Column[]][] {
+  const map = new Map<number, Column[]>();
+  for (const col of columns) {
+    if (!map.has(col.bracket)) map.set(col.bracket, []);
+    map.get(col.bracket)!.push(col);
+  }
+  return [...map.entries()].sort(([a], [b]) => a - b);
+}
 
 function slotCellClass(status: string | undefined) {
   switch (status) {
@@ -59,24 +70,31 @@ function MasterTable({
             </tr>
           </thead>
           <tbody>
-            {columns.map((col) => (
-              <tr key={`${col.bracket}-${col.slotIndex}`}>
-                <td className="master-table-sticky-col font-medium">
-                  {col.bracket === 0 ? "Bonus" : `B${col.bracket}`}·{col.slotIndex + 1}
-                </td>
-                {characters.map((c) => {
-                  const slot = slotsByKey.get(`${c.id}|${track}|${col.bracket}|${col.slotIndex}`);
-                  return (
-                    <td
-                      key={c.id}
-                      className={slotCellClass(slot?.status)}
-                      title={slot?.itemName ?? undefined}
-                    >
-                      {slot?.itemName ?? "—"}
-                    </td>
-                  );
-                })}
-              </tr>
+            {groupColumnsByBracket(columns).map(([bracket, slots]) => (
+              <Fragment key={bracket}>
+                <tr>
+                  <td colSpan={characters.length + 1} className="master-table-group-header">
+                    {bracket === 0 ? "Bonus Bid" : `Bracket ${bracket}`}
+                  </td>
+                </tr>
+                {slots.map((col) => (
+                  <tr key={`${col.bracket}-${col.slotIndex}`}>
+                    <td className="master-table-sticky-col font-medium">Slot {col.slotIndex + 1}</td>
+                    {characters.map((c) => {
+                      const slot = slotsByKey.get(`${c.id}|${track}|${col.bracket}|${col.slotIndex}`);
+                      return (
+                        <td
+                          key={c.id}
+                          className={slotCellClass(slot?.status)}
+                          title={slot?.itemName ?? undefined}
+                        >
+                          {slot?.itemName ?? "—"}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </Fragment>
             ))}
           </tbody>
         </table>

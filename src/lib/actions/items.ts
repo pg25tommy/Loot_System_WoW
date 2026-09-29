@@ -33,6 +33,7 @@ export async function createItemAction(formData: FormData) {
   });
 
   revalidatePath("/officer/items");
+  revalidatePath("/officer/loot/recipes");
 }
 
 export async function updateItemAction(itemId: string, formData: FormData) {

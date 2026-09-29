@@ -17,6 +17,7 @@ const SECTIONS: { label: string; links: { href: string; label: string; icon: Par
       { href: "/officer/characters", label: "Characters", icon: "characters" },
       { href: "/officer/master-list", label: "Master List", icon: "masterList" },
       { href: "/officer/items", label: "Items", icon: "items" },
+      { href: "/officer/loot/recipes", label: "Recipes", icon: "recipes" },
       { href: "/officer/attendance", label: "Attendance", icon: "attendance" },
     ],
   },
@@ -28,7 +29,6 @@ const SECTIONS: { label: string; links: { href: string; label: string; icon: Par
       { href: "/officer/loot/open-rolls", label: "Open rolls", icon: "openRolls" },
       { href: "/officer/loot/world-boss", label: "World boss", icon: "worldBoss" },
       { href: "/officer/loot/gatherables", label: "Gatherables", icon: "gatherables" },
-      { href: "/officer/loot/recipes", label: "Recipes", icon: "recipes" },
     ],
   },
   {

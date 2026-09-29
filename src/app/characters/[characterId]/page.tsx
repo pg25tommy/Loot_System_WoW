@@ -104,15 +104,40 @@ function buildComparisonRows(mySlots: SlotForDisplay[], theirSlots: SlotForDispl
   });
 }
 
+function ComparePersonHeader({ name, wowClass }: { name: string; wowClass: string }) {
+  return (
+    <span className="inline-flex items-center gap-1.5 normal-case tracking-normal">
+      <ClassIcon className={wowClass} size="sm" />
+      <span className="font-semibold" style={{ color: classColor(wowClass) }}>
+        {name}
+      </span>
+    </span>
+  );
+}
+
+function CompareSlotCell({ slot }: { slot?: { bracket: number; status: string } }) {
+  if (!slot) return <span className="text-faint">— not bid</span>;
+  return (
+    <span className="flex flex-wrap items-center gap-2">
+      <span className="text-muted">{slot.bracket === 0 ? "Bonus" : `Bracket ${slot.bracket}`}</span>
+      <StatusBadge status={slot.status} />
+    </span>
+  );
+}
+
 function CompareTrackSection({
   title,
   myName,
+  myClass,
   theirName,
+  theirClass,
   rows,
 }: {
   title: string;
   myName: string;
+  myClass: string;
   theirName: string;
+  theirClass: string;
   rows: ComparisonRow[];
 }) {
   if (rows.length === 0) {
@@ -127,12 +152,12 @@ function CompareTrackSection({
   return (
     <div>
       <h2 className="text-lg font-medium">{title}</h2>
-      <div className="mt-2 grid grid-cols-[1fr_auto_auto] gap-x-3 gap-y-1 text-xs font-semibold uppercase tracking-wide text-muted">
+      <div className="mt-3 grid grid-cols-[1.5fr_1fr_1fr] gap-x-4 gap-y-1 px-1 text-xs font-semibold uppercase tracking-wide text-muted">
         <span>Item</span>
-        <span>{myName}</span>
-        <span>{theirName}</span>
+        <ComparePersonHeader name={myName} wowClass={myClass} />
+        <ComparePersonHeader name={theirName} wowClass={theirClass} />
       </div>
-      <ul className="mt-1 space-y-1">
+      <ul className="mt-2 space-y-2">
         {rows.map((row) => {
           const overlap = Boolean(row.mine && row.theirs);
           return (
@@ -140,27 +165,13 @@ function CompareTrackSection({
               key={row.itemName}
               className={
                 overlap
-                  ? "grid grid-cols-[1fr_auto_auto] items-center gap-x-3 panel-row panel-row-overlap"
-                  : "grid grid-cols-[1fr_auto_auto] items-center gap-x-3 panel-row"
+                  ? "grid grid-cols-[1.5fr_1fr_1fr] items-center gap-x-4 panel-row panel-row-overlap"
+                  : "grid grid-cols-[1.5fr_1fr_1fr] items-center gap-x-4 panel-row"
               }
             >
               <span className={overlap ? "font-medium" : ""}>{row.itemName}</span>
-              <span className="text-sm">
-                {row.mine ? (
-                  <span className="text-muted">B{row.mine.bracket} · </span>
-                ) : (
-                  <span className="text-faint">—</span>
-                )}
-                {row.mine ? <StatusBadge status={row.mine.status} /> : null}
-              </span>
-              <span className="text-sm">
-                {row.theirs ? (
-                  <span className="text-muted">B{row.theirs.bracket} · </span>
-                ) : (
-                  <span className="text-faint">—</span>
-                )}
-                {row.theirs ? <StatusBadge status={row.theirs.status} /> : null}
-              </span>
+              <CompareSlotCell slot={row.mine} />
+              <CompareSlotCell slot={row.theirs} />
             </li>
           );
         })}
@@ -271,11 +282,13 @@ export default async function CharacterPage({
           </form>
 
           {compareCharacter ? (
-            <div className="grid gap-8 sm:grid-cols-2">
+            <div className="space-y-8">
               <CompareTrackSection
                 title={trackLabel("LEGACY")}
                 myName={character.name}
+                myClass={character.class}
                 theirName={compareCharacter.name}
+                theirClass={compareCharacter.class}
                 rows={buildComparisonRows(
                   [...(grouped.get(Track.LEGACY)?.values() ?? [])].flat(),
                   [...(compareGrouped.get(Track.LEGACY)?.values() ?? [])].flat(),
@@ -284,7 +297,9 @@ export default async function CharacterPage({
               <CompareTrackSection
                 title={trackLabel("NON_LEGACY")}
                 myName={character.name}
+                myClass={character.class}
                 theirName={compareCharacter.name}
+                theirClass={compareCharacter.class}
                 rows={buildComparisonRows(
                   [...(grouped.get(Track.NON_LEGACY)?.values() ?? [])].flat(),
                   [...(compareGrouped.get(Track.NON_LEGACY)?.values() ?? [])].flat(),
