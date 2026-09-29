@@ -20,7 +20,7 @@ import {
 } from "@/lib/actions/loot";
 
 type Item = { id: string; name: string };
-type CharacterOption = { id: string; name: string; class: string };
+type CharacterOption = { id: string; name: string; class: string; isTank: boolean };
 
 function CharacterTag({ name, wowClass }: { name: string; wowClass: string | null }) {
   if (!wowClass) return <span>{name}</span>;
@@ -161,6 +161,20 @@ export function ResolveWizard({
     });
   }
 
+  // A tank who isn't in the tie has no tied slot to win with, so they spend
+  // one of their own slots instead — the same path as an up-front tank claim.
+  function handleTankSpendSlot(slotId: string) {
+    setError(null);
+    startTransition(async () => {
+      const res = await tankPriorityPlanAction(slotId);
+      if (!res.ok) {
+        setError(res.error);
+        return;
+      }
+      setPlan(res.data);
+    });
+  }
+
   if (result) {
     return (
       <div className="banner-success">
@@ -261,8 +275,8 @@ export function ResolveWizard({
                       onChange={(e) => loadTankSlots(e.target.value, track)}
                       className="mt-1 w-full input"
                     >
-                      <option value="">Select...</option>
-                      {characters.map((c) => (
+                      <option value="">Select a tank...</option>
+                      {characters.filter((c) => c.isTank).map((c) => (
                         <option key={c.id} value={c.id} style={{ color: classColor(c.class) }}>
                           {c.name}
                         </option>
@@ -308,6 +322,9 @@ export function ResolveWizard({
           setRolls={setRolls}
           onRollSubmit={handleRollSubmit}
           onTankAutoWin={handleTankAutoWin}
+          onTankSpendSlot={handleTankSpendSlot}
+          tanks={characters.filter((c) => c.isTank)}
+          loadSlots={(characterId) => getCharacterSlotsAction(characterId, phaseId, track)}
           onConfirm={handleConfirm}
           onBack={reset}
           isTankOfficer={isTankOfficer}
@@ -325,6 +342,9 @@ function PlanReview({
   setRolls,
   onRollSubmit,
   onTankAutoWin,
+  onTankSpendSlot,
+  tanks,
+  loadSlots,
   onConfirm,
   onBack,
   isTankOfficer,
@@ -336,6 +356,9 @@ function PlanReview({
   setRolls: (r: Record<string, string>) => void;
   onRollSubmit: (t: TiebreakResult) => void;
   onTankAutoWin: (t: TiebreakResult, characterId: string) => void;
+  onTankSpendSlot: (slotId: string) => void;
+  tanks: CharacterOption[];
+  loadSlots: (characterId: string) => Promise<SlotOption[]>;
   onConfirm: () => void;
   onBack: () => void;
   isTankOfficer: boolean;
@@ -381,18 +404,23 @@ function PlanReview({
             </li>
           ))}
         </ul>
-        <div className="flex items-center gap-3">
-          <button
-            onClick={() => onRollSubmit(tiebreak)}
-            disabled={pending}
-            className="btn"
-          >
-            Finalize roll
-          </button>
-          {isTankOfficer ? (
-            <TankAutoWinPicker tiebreak={tiebreak} onPick={(id) => onTankAutoWin(tiebreak, id)} />
-          ) : null}
-        </div>
+        <button
+          onClick={() => onRollSubmit(tiebreak)}
+          disabled={pending}
+          className="btn"
+        >
+          Finalize roll
+        </button>
+        {isTankOfficer ? (
+          <TankAutoWinPicker
+            tiebreak={tiebreak}
+            tanks={tanks}
+            loadSlots={loadSlots}
+            pending={pending}
+            onAutoWin={(id) => onTankAutoWin(tiebreak, id)}
+            onSpendSlot={onTankSpendSlot}
+          />
+        ) : null}
         {error ? <p className="text-sm text-danger">{error}</p> : null}
         <CompetingBrackets allBracketCandidates={plan.allBracketCandidates} highlightBracket={plan.bracket} />
         <button onClick={onBack} className="link text-sm">
@@ -484,33 +512,98 @@ function CompetingBrackets({
 
 function TankAutoWinPicker({
   tiebreak,
-  onPick,
+  tanks,
+  loadSlots,
+  pending,
+  onAutoWin,
+  onSpendSlot,
 }: {
   tiebreak: TiebreakResult;
-  onPick: (characterId: string) => void;
+  tanks: CharacterOption[];
+  loadSlots: (characterId: string) => Promise<SlotOption[]>;
+  pending: boolean;
+  onAutoWin: (characterId: string) => void;
+  onSpendSlot: (slotId: string) => void;
 }) {
+  const [enabled, setEnabled] = useState(false);
   const [characterId, setCharacterId] = useState("");
+  const [slots, setSlots] = useState<SlotOption[]>([]);
+  const [slotId, setSlotId] = useState("");
+  const [loadingSlots, startLoadingSlots] = useTransition();
+
+  const tiedIds = new Set(tiebreak.tiedCandidates.map((c) => c.characterId));
+  const inTie = !!characterId && tiedIds.has(characterId);
+
+  function pickTank(id: string) {
+    setCharacterId(id);
+    setSlotId("");
+    setSlots([]);
+    if (id && !tiedIds.has(id)) {
+      startLoadingSlots(async () => setSlots(await loadSlots(id)));
+    }
+  }
+
   return (
-    <div className="flex items-center gap-2">
-      <select
-        value={characterId}
-        onChange={(e) => setCharacterId(e.target.value)}
-        className="input input-sm"
-      >
-        <option value="">Tank auto-win...</option>
-        {tiebreak.tiedCandidates.map((c) => (
-          <option key={c.characterId} value={c.characterId} style={{ color: classColor(c.character.class) }}>
-            {c.character.name}
-          </option>
-        ))}
-      </select>
-      <button
-        disabled={!characterId}
-        onClick={() => onPick(characterId)}
-        className="text-sm text-danger underline disabled:opacity-50"
-      >
-        Apply
-      </button>
+    <div className="panel panel-sm">
+      <label className="flex items-center gap-2 text-sm font-medium">
+        <input
+          type="checkbox"
+          checked={enabled}
+          onChange={(e) => {
+            setEnabled(e.target.checked);
+            pickTank("");
+          }}
+        />
+        Tank priority (give this item to a tank instead of rolling)
+      </label>
+      {enabled ? (
+        tanks.length === 0 ? (
+          <p className="mt-2 text-sm text-muted">No tanks set up yet. Mark them under Config → Tanks.</p>
+        ) : (
+          <div className="mt-3 space-y-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <select value={characterId} onChange={(e) => pickTank(e.target.value)} className="input input-sm">
+                <option value="">Select a tank...</option>
+                {tanks.map((c) => (
+                  <option key={c.id} value={c.id} style={{ color: classColor(c.class) }}>
+                    {c.name}
+                    {tiedIds.has(c.id) ? " (in this tie)" : ""}
+                  </option>
+                ))}
+              </select>
+              {!inTie && characterId ? (
+                <select
+                  value={slotId}
+                  onChange={(e) => setSlotId(e.target.value)}
+                  disabled={loadingSlots}
+                  className="input input-sm"
+                >
+                  <option value="">{loadingSlots ? "Loading slots..." : "Slot to spend..."}</option>
+                  {slots.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      Bracket {s.bracket} · slot {s.slotIndex + 1} {s.item ? `(${s.item.name})` : "(empty)"}
+                    </option>
+                  ))}
+                </select>
+              ) : null}
+              <button
+                disabled={pending || !characterId || (!inTie && !slotId)}
+                onClick={() => (inTie ? onAutoWin(characterId) : onSpendSlot(slotId))}
+                className="btn disabled:opacity-50"
+              >
+                Give to tank
+              </button>
+            </div>
+            {characterId ? (
+              <p className="text-xs text-muted">
+                {inTie
+                  ? "This tank is in the tie, so they win it with their tied slot."
+                  : "This tank isn't in the tie, so pick which of their slots to spend on the item."}
+              </p>
+            ) : null}
+          </div>
+        )
+      ) : null}
     </div>
   );
 }

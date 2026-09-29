@@ -41,6 +41,7 @@ const SECTIONS: { label: string; links: { href: string; label: string; icon: Par
       { href: "/officer/config/brackets", label: "Bracket config", icon: "bracketConfig" },
       { href: "/officer/config/rank-tiers", label: "Rank tiers", icon: "rankTiers" },
       { href: "/officer/config/gatherables", label: "Gatherable values", icon: "gatherableValues" },
+      { href: "/officer/config/tanks", label: "Tanks", icon: "tanks" },
       { href: "/officer/config/officers", label: "Officers", icon: "officers" },
     ],
   },

@@ -206,6 +206,7 @@ model Character {
   server          String?
   class           String
   spec            String
+  isTank          Boolean   @default(false)
   isAlt           Boolean   @default(false)
   mainCharacterId String?
   mainCharacter   Character?  @relation("AltOf", fields: [mainCharacterId], references: [id])

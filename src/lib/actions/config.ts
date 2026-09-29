@@ -1,7 +1,7 @@
 "use server";
 
-// CRUD Server Actions for the four officer-editable config areas: bracket
-// sizes, rank tiers, gatherable gold-value brackets, and officer accounts.
+// CRUD Server Actions for the officer-editable config areas: bracket
+// sizes, rank tiers, gatherable gold-value brackets, officer accounts, and tanks.
 // Officer-account actions require requireAdmin() (only the admin manages
 // other officers); everything else just requires requireOfficer().
 import { revalidatePath } from "next/cache";
@@ -166,4 +166,21 @@ export async function deleteOfficerAction(officerId: string) {
   await prisma.officer.delete({ where: { id: officerId } });
 
   revalidatePath("/officer/config/officers");
+}
+
+// --- Tanks ------------------------------------------------------------------
+
+/** Sets isTank on every active character from the Tanks page's checkboxes (unchecked = not a tank). */
+export async function saveTanksAction(formData: FormData) {
+  await requireOfficer();
+
+  const tankIds = formData.getAll("tankIds").map(String);
+
+  await prisma.$transaction([
+    prisma.character.updateMany({ where: { isActive: true, id: { in: tankIds } }, data: { isTank: true } }),
+    prisma.character.updateMany({ where: { isActive: true, id: { notIn: tankIds } }, data: { isTank: false } }),
+  ]);
+
+  revalidatePath("/officer/config/tanks");
+  revalidatePath("/officer/loot/resolve");
 }

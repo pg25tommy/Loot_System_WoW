@@ -3,6 +3,7 @@
 // Server Actions backing the ResolveWizard (/officer/loot/resolve) and the
 // pass-chain panel on a drop's detail page.
 import { revalidatePath } from "next/cache";
+import { after } from "next/server";
 import { requireOfficer } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import type { Track } from "@/generated/prisma/client";
@@ -15,6 +16,7 @@ import {
   type LootResolutionPlan,
   type TiebreakResult,
 } from "@/lib/rules/lootResolution";
+import { postLootResultToDiscord } from "@/lib/discord";
 import { startPassChain, recordPassDecision, passAsIdenticalItemAlreadyWon } from "@/lib/rules/passing";
 
 /**
@@ -101,6 +103,9 @@ export async function confirmResolutionAction(
     revalidatePath("/officer/loot/drops");
     revalidatePath("/officer");
     if (plan.winnerCharacterId) revalidatePath(`/characters/${plan.winnerCharacterId}`);
+
+    // Announce in Discord once the officer has their response.
+    after(() => postLootResultToDiscord(plan, context));
 
     return drop;
   });

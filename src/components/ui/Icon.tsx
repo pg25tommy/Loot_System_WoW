@@ -16,6 +16,7 @@ const PATHS: Record<string, string> = {
   rankTiers: "M12 2 3 6v6c0 5 4 9 9 10 5-1 9-5 9-10V6l-9-4Z",
   gatherableValues: "M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6",
   officers: "M12 2 3 6v6c0 5 4 9 9 10 5-1 9-5 9-10V6l-9-4Zm-3 10 2 2 4-4",
+  tanks: "M12 2 4 5v6c0 5.5 3.5 9.5 8 11 4.5-1.5 8-5.5 8-11V5l-8-3Z",
   characterCount: "M17 21v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2M11 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z",
   itemCount: "M21 8 12 3 3 8l9 5 9-5Zm0 0v8l-9 5-9-5V8",
   chevronRight: "m9 18 6-6-6-6",

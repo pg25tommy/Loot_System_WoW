@@ -13,7 +13,7 @@ export default async function ResolveLootPage() {
     prisma.character.findMany({
       where: { isActive: true },
       orderBy: { name: "asc" },
-      select: { id: true, name: true, class: true },
+      select: { id: true, name: true, class: true, isTank: true },
     }),
   ]);
 
